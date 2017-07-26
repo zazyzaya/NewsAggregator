@@ -13,8 +13,8 @@ import requests
 import easygui
 import json
 import feedparser
-
-API = ' ### PUT API KEY HERE ### '
+import time
+import queue    # PyInstaller dependancy
 
 exclude = ['breitbart-news']    # Exclude list from NewsAPI
 
@@ -24,7 +24,26 @@ exclude = ['breitbart-news']    # Exclude list from NewsAPI
 rssFeeds = [('cnn-tech', 'http://rss.cnn.com/rss/cnn_tech.rss'), ('fox-news', 'http://feeds.foxnews.com/foxnews/latest?format=xml'), 
             ('legal-tech-news', 'http://feeds.feedblitz.com/lawtechnologynews'), ('dhs', 'https://www.dhs.gov/news/rss.xml'), 
             ('ics-cert', 'https://ics-cert.us-cert.gov/xml/rss.xml'), ('naked-security', 'https://nakedsecurity.sophos.com/feed/'),
-            ('threat-post', 'https://threatpost.com/feed/')]
+            ('threat-post', 'https://threatpost.com/feed/'), ('CVEs', 'https://nvd.nist.gov/download/nvd-rss-analyzed.xml'),
+            ('acm-tech-news', 'http://rss.acm.org/technews/TechNews.xml'), ('breaking-defense', 'http://feeds.feedburner.com/BreakingDefense?format=xml'),
+            ('defense.gov', 'https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?max=15&ContentType=9&Site=727'),
+            ('security-magazine-physical', 'http://www.securitymagazine.com/rss/topic/2228'), ('security-magazine-cyber', 'http://www.securitymagazine.com/rss/topic/2788'),
+            ('professional-security', 'http://www.professionalsecurity.co.uk/rss-feed/')]
+
+API = '' # Insert NewsAPI key here
+Intel471_API = 'Basic ' # Insert Base 64 encoded User and API key here
+
+def clean_breaking_defense(f):
+    oldDesc = f['description']
+    newDesc = ''
+
+    #always the second <p> tag in the description
+    splitDesc = oldDesc.split('</p>')
+    newDesc = splitDesc[1][3:]
+
+    f['description'] = newDesc
+
+    return f
 
 def clean_naked_sec(f):
     oldDesc = f['description']
@@ -81,6 +100,7 @@ def get_rss_feed(url, publication, numArticles=15):
                         'title': d.entries[entry].title,
                         'description': d.entries[entry].description,
                         'url': d.entries[entry].link
+                        #'pubDate': d.entries[entry].pubDate
                         }
             if publication == 'legal-tech-news':
                 retVal = clean_legal_tech_news(retVal)
@@ -88,6 +108,8 @@ def get_rss_feed(url, publication, numArticles=15):
                 retVal = clean_dhs(retVal)
             elif publication == 'naked-security':
                 retVal = clean_naked_sec(retVal)
+            elif publication == 'breaking-defense':
+                retVal = clean_breaking_defense(retVal)
 
             entryList.append(retVal)
         
@@ -95,6 +117,17 @@ def get_rss_feed(url, publication, numArticles=15):
             return entryList
 
     return entryList
+
+def get_intel471_json(apiKey, sort='latest', count='25'):
+    url = 'https://api.intel471.com/v1/reports'
+    params = {  'sort': sort,
+                'count': count,
+                'prettyPrint': True}
+    
+    header = {  'Authorization': apiKey }
+
+    r = requests.get(url, params=params, headers=header).json()
+    return r['reports']
 
 def get_json_response(  apiKey, source='google-news', sortBy='top', category='politics',
                         language='en', country='us', request='articles'):
@@ -133,6 +166,39 @@ def get_sources(apiKey):
                 source_list.append(source['id'])
 
     return source_list
+
+def parse_Intel471_response(api, search_terms):
+    hits = {}
+    print("Searching  Intel-471 (This may take a while)")
+    dict_list = get_intel471_json(api, count=15)
+
+    for article in dict_list:
+        for terms in search_terms:
+            dict_key = ''
+            for term in terms:
+                dict_key += term
+            
+            hit = True
+            for term in terms:
+                if term not in article['subject'].upper():
+                    hit = False
+            
+            if hit == True:
+                if dict_key not in hits:
+                    hits[dict_key] = [{
+                        'title': article['subject'],
+                        'url': article['portalReportUrl'],
+                        'publication': 'Intel-471'
+                    }]
+
+                else:
+                    hits[dict_key].append({
+                        'title': article['subject'],
+                        'url': article['portalReportUrl'],
+                        'publication': 'Intel-471'
+                    })
+
+    return hits
 
 def parse_json_sources(apiKey, source_list, search_terms):
     raw_responses = {}
@@ -269,29 +335,73 @@ def save(doc):
         easygui.msgbox("Filename or save location not allowed.")
         save(doc)
 
-def main():
-    global API
+def getTermsFromFile():     # Splits queries by newline, treating spaces between words as AND Operators
+    fname = easygui.fileopenbox("Select file with search terms separated by newlines")
+    with open(fname, 'r') as f:
+        raw_terms = f.read()
 
+    split_terms = raw_terms.split('\n')
+    logic_terms = []
+
+    for terms in split_terms:
+        line_terms = []
+        for term in terms.split(' '):
+            if term != '':
+                line_terms.append(term.upper())
+        if line_terms not in logic_terms and line_terms != []:
+            logic_terms.append(line_terms)
+
+    print(logic_terms)
+    return logic_terms
+
+def getTermsFromUser():
     raw_terms = easygui.enterbox("Input each term seperated by commas: ")
     less_raw_terms = raw_terms.split(',')
     search_terms_no_logic = []
     search_terms = []
 
     for t in less_raw_terms:
-        if t[0] == " ":
-            t = t[1:]
-        search_terms_no_logic.append(t.upper())
+        if t != '':
+            search_terms_no_logic.append(t.upper())
 
     for t in search_terms_no_logic:
-        search_terms.append(t.split(' '))
+        split_terms = t.split(' ')
+        for term_index in range(len(split_terms)):
+            try:
+                if split_terms[term_index] == '':
+                    split_terms.pop(term_index)
+            except (IndexError):
+                pass
+
+        if split_terms not in search_terms:
+            search_terms.append(split_terms)
     print(search_terms)
+
+    return search_terms
+
+def main():
+    global API
+    rssTime = time.strftime("%a, %d %b %Y") # Currently not implimented, formats date like xml <pubDate> tag
+                                            # ie Mon, 01 Mar 2017
+    termsFromFile = easygui.ynbox("Are search terms coming from a file?")
+    if termsFromFile == True:
+        search_terms = getTermsFromFile()
+    else:
+        search_terms = getTermsFromUser()
+    
 
     source_list = get_sources(API)
     search_results_json = parse_json_sources(API, source_list, search_terms)
     search_results_rss = parse_rss_sources(rssFeeds, search_terms)
+    search_results_intel471 = parse_Intel471_response(Intel471_API, search_terms)
+
     search_results = combine_dicts(search_results_json, search_results_rss)
+    search_results = combine_dicts(search_results, search_results_intel471)
     
     out_doc = format_hits(search_results)
     save(out_doc)
 
 main()
+
+# TODO:     Ignore just whitespace in searchterms
+#           Look for terms as words with spaces before or after
