@@ -201,53 +201,50 @@ def parse_Intel471_response(api, search_terms):
     return hits
 
 def parse_json_sources(apiKey, source_list, search_terms):
-    raw_responses = {}
+    raw_responses = []
     hits = {}
 
     for source in source_list:
-        if source not in raw_responses:    
-            raw_responses[source] = [get_json_response(apiKey, source=source)]
-        else:
-            raw_responses[source].append(get_json_response(apiKey, source=source))
+        raw_responses.append(get_json_response(apiKey, source=source))
+        print("Searching  " + source)
 
-    # TODO this algorithm is horrible. Fix this. Make more like parse_rss_sources()
-    for publication, value in raw_responses.items():
-        print("Searching ", publication)
-        for articles in value:
-            for article in articles['articles']:
-                try:
-                    desc = article['description'].upper()
-                except KeyError:
-                    desc = ''
-                except AttributeError:
-                    desc = ''
+    source_index = 0     # Keeps track of which source we're on
+    for articles in raw_responses:
+        source = source_list[source_index]
+        for article in articles['articles']:
+            try:
+                desc = article['description'].upper()
+            except KeyError:
+                desc = ''
+            except AttributeError:
+                desc = ''
 
-                try: 
-                    title = article['title'].upper()
-                except KeyError:
-                    title = ''
-                except AttributeError:
-                    title = ''
+            try: 
+                title = article['title'].upper()
+            except KeyError:
+                title = ''
+            except AttributeError:
+                title = ''
 
-                for terms in search_terms:
-                    dict_key = ''
-                    
-                    for term in terms:
-                        dict_key += term + ' '
-                    dict_key = dict_key[:-1]
+            for terms in search_terms:
+                dict_key = ''
+                
+                for term in terms:
+                    dict_key += term + ' '
+                dict_key = dict_key[:-1]
 
-                    append_list = True
-                    for term in terms:
-                        if (term not in title) and (term not in desc):
-                            append_list = False
+                append_list = True
+                for term in terms:
+                    if (term not in title) and (term not in desc):
+                        append_list = False
 
-                    if append_list:
-                        if term not in hits:
-                            article['publication'] = publication
-                            hits[dict_key] = [article]
-                        else:
-                            article['publication'] = publication
-                            hits[dict_key].append(article)
+                if append_list:
+                    article['publication'] = source
+                    if term not in hits:
+                        hits[dict_key] = [article]
+                    else:
+                        hits[dict_key].append(article)
+        source_index += 1
 
     return hits
 
@@ -403,5 +400,4 @@ def main():
 
 main()
 
-# TODO:     Ignore just whitespace in searchterms
-#           Look for terms as words with spaces before or after
+# TODO:    Look for terms as words with spaces before or after
